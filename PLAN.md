@@ -260,24 +260,41 @@ now and expensive later.
 
 **Total ≈ 10.75 working days ≈ 2.5 calendar weeks solo.**
 
-**M0, M1 and M2 are complete.** Scaffolds pushed, schema live, 235 seed words,
-rooms working end to end: create/join by code, host-only settings, host
-succession on disconnect, and refresh-survivable sessions via reconnect tokens.
-Verified by a 22-case socket smoke test (`pnpm smoke` in the backend repo).
+**All milestones M0–M8 are complete.** The game is playable end to end and the
+backend runs in its production container.
 
-Two bugs found and fixed along the way, both worth recording because they were
-invisible until exercised:
+Verified: 62 socket-level test cases across three suites (`pnpm smoke`,
+`smoke:game`, `smoke:guess`), all passing against both a dev server and the
+built Docker image, plus the words endpoint and graceful shutdown.
+
+### Bugs found by exercising the system
+
+Each was invisible to the type checker and to inspection:
 
 - `Result<Record<string, never>>` was unsatisfiable — intersecting `{ok: true}`
   with `Record<string, never>` collapses `ok` to `never`, so no success ack
-  could be constructed. Contract is now v2.
+  could be constructed. (Contract v2.)
 - Frontend CI could not fetch the contract at all: `raw.githubusercontent.com`
-  cannot authenticate against a private repo. CI now checks the backend out as
-  a sibling using a `BE_REPO_TOKEN` secret. **This secret must be added to the
-  frontend repo before its CI will pass.**
+  cannot authenticate against a private repo, leaving the drift guard inert in
+  the one place it mattered. CI now checks the backend out as a sibling.
+- `id NOT IN (NULL)` matched **zero** rows, so word selection returned nothing
+  and every game ended the instant it started.
+- The custom-word rate limiter counted rejected attempts, so three typos locked
+  a player out of submitting a valid word.
+- The Docker build failed because corepack was unpinned and ignored
+  `onlyBuiltDependencies`, so `better-sqlite3` never compiled.
 
-Dropping the admin panel saved ~1.5 days directly, and removed the dependency
-that previously held dictionary management hostage to a UI milestone.
+### Known gaps
+
+- **The frontend has no automated tests.** It typechecks and builds against the
+  real contract, and every server interaction behind it is covered, but the UI
+  itself has not been driven in a browser.
+- **Profanity filtering is a short hand-written list.** Fine among colleagues;
+  swap in a maintained library before exposing this to strangers.
+- **Single instance only.** Rooms live in memory, so horizontal scaling needs a
+  Redis adapter first.
+- Flood fill is a background wash, not a true paint-bucket: a raster flood fill
+  cannot be replayed from a vector stroke log.
 
 Two checkpoints where it is worth stopping to play it before continuing:
 
@@ -287,6 +304,8 @@ Two checkpoints where it is worth stopping to play it before continuing:
   corporate-slang dictionary gets its first real test, and where drawability
   ratings will need their first correction. From M1 onward you can fix them with
   an UPDATE mid-session, without waiting for a tool to be built.
+
+Both checkpoints are now reachable: run both servers and open two browsers.
 
 M2 → M3 → M4 → M5 is the critical path. M1 (dictionary) is independent of the
 drawing work and could run in parallel with a second developer.

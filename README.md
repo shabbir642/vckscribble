@@ -26,4 +26,8 @@ contract locally instead of fetching it from GitHub.
 
 ## Status
 
-M0 (scaffold), M1 (dictionary) and M2 (rooms) complete. M3 (canvas) is next.
+All milestones complete (M0–M8). Playable end to end; backend verified in its
+production container with 62 passing socket tests.
+
+**Before deploying:** add a `BE_REPO_TOKEN` secret to the frontend repo (a PAT
+with read access to the backend repo) or its CI contract check will fail.
