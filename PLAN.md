@@ -8,7 +8,18 @@ from the original:
 3. The dictionary can be extended by the owner — via direct SQL, plus a small
    token-protected endpoint added at the very end of the build.
 
-No admin UI, no owner accounts, no login. See §7.
+Web only, desktop-first. No admin UI, no owner accounts, no login. See §7.
+
+**Repos** — frontend and backend are deployed and versioned separately:
+
+| Repo | Contents |
+|---|---|
+| [`vckscribble`](https://github.com/shabbir642/vckscribble) | this plan (umbrella/docs) |
+| [`vckscribble-be`](https://github.com/shabbir642/vckscribble-be) | Node + Socket.IO + SQLite. **Owns the socket contract.** |
+| [`vckscribble-fe`](https://github.com/shabbir642/vckscribble-fe) | React + Vite. Vendors the contract. |
+
+Locally they sit at `vckscribble/be` and `vckscribble/fe`, each an independent
+git repo, gitignored by the umbrella.
 
 ---
 
@@ -39,6 +50,14 @@ firehose` is long and obscure and draws itself. So difficulty is a
 hand-authored drawability rating seeded per word, then corrected against real
 guess-rate data — queried with SQL (§7).
 
+**Separate repos remove the compile-time protocol guarantee.** A monorepo can
+put the socket contract in a package both sides import, making client/server
+drift a build error. Across two repos that is no longer free. Rather than
+duplicate the types by hand and hope, the BE owns the contract and the FE
+vendors a generated copy; FE CI fails when the two diverge. The guarantee moves
+from the compiler to CI, which is weaker — drift is caught at push, not at
+keystroke — but it is the honest cost of the split, not something to paper over.
+
 **Requirement 1 cannot be pre-moderated.** A custom word is used *immediately* —
 the round starts the instant it is submitted, so there is no window for review
 before it reaches players. Moderation is therefore synchronous (validation +
@@ -58,17 +77,21 @@ permanent place in the dictionary.
 | DB | SQLite + Drizzle | One file, zero ops, and `sqlite3 game.db` *is* the admin panel. Managed Postgres would be overhead for one table of words |
 | Deploy | Single container, Fly.io or Railway | WebSocket-friendly with a persistent volume. **Not** Vercel/Lambda — serverless cannot hold socket connections |
 
-Workspace layout (pnpm):
+### Crossing the repo boundary
 
-```
-client/   React app
-server/   Socket.IO + Express + Drizzle
-shared/   Socket event types, word normalization (imported by BOTH sides)
-```
+`vckscribble-be/src/contract/index.ts` is the single source of truth: socket
+event signatures, domain types, and the guess-normalization function. The
+frontend vendors it to `src/generated/contract.ts` via `pnpm contract:sync`,
+which resolves from `$CONTRACT_SOURCE`, then a sibling `../be` checkout, then
+the BE repo's raw GitHub URL — so it works cloned together or alone.
 
-`shared/` holds the guess-normalization function specifically so the client can
-preview "is this a valid guess" with exactly the server's logic, with the server
-still authoritative.
+`pnpm contract:check` fails on drift and runs both in CI and in `pnpm build`.
+Normalization ships inside the contract specifically so the client can preview
+"is this a valid guess" with exactly the server's logic; the server stays
+authoritative regardless.
+
+Upgrade path if this gets tiresome: publish the contract to a private registry
+and depend on it by version. Not worth the ceremony at this size.
 
 ---
 
@@ -231,11 +254,15 @@ now and expensive later.
 | M3 | Canvas: stroke log, drawing sync, tools, late-joiner replay, undo | 2.0 | M2 |
 | M4 | Game loop: round state machine, server timer, word selection, **custom-word entry** | 2.0 | M1, M2 |
 | M5 | Guessing: phrase normalization, matching, hints, scoring, channel separation | 1.5 | M4 |
-| M6 | Polish: avatars, sound, mobile touch, end-game podium | 2.0 | M5 |
+| M6 | Polish: avatars, sound, end-game podium, keyboard shortcuts | 1.5 | M5 |
 | M7 | Deploy: container, volume, env config, load/abuse hardening | 1.0 | M6 |
 | M8 | `POST /api/words` + bearer token | 0.25 | M7 |
 
-**Total ≈ 11.25 working days ≈ 2.5 calendar weeks solo.**
+**Total ≈ 10.75 working days ≈ 2.5 calendar weeks solo.**
+
+**M0 and M1 are complete** — both repos scaffolded and pushed, schema live,
+235 seed words, `/api/health` green through the Vite proxy, contract sync
+verified to fail on injected drift.
 
 Dropping the admin panel saved ~1.5 days directly, and removed the dependency
 that previously held dictionary management hostage to a UI milestone.
@@ -257,8 +284,9 @@ drawing work and could run in parallel with a second developer.
 | Risk | Mitigation |
 |---|---|
 | Canvas perf degrades over a long round | Offscreen caching, per-frame batching, stroke cap (M3) |
+| Pointer input edge cases (stylus, trackpad) | Pointer Events API from the start, not mouse events retrofitted (M3) |
 | Round-transition race conditions | Server-authoritative state machine, single timer source, clients render only what they're told (M4) |
-| Mobile touch handling | Pointer Events API from the start rather than mouse events retrofitted (M3) |
+| Client/server contract drift across repos | Vendored contract + `contract:check` in FE CI and build (done, M0) |
 | Custom-word abuse | Sync validation, profanity filter, rate limit, in-game report (M4) |
 | Unguarded write endpoint | Bearer token from env, required at M8 — not optional |
 | Slang dictionary skews stale or regional | Stats-driven retirement query in §7a |
