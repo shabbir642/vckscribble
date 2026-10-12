@@ -260,9 +260,21 @@ now and expensive later.
 
 **Total ≈ 10.75 working days ≈ 2.5 calendar weeks solo.**
 
-**M0 and M1 are complete** — both repos scaffolded and pushed, schema live,
-235 seed words, `/api/health` green through the Vite proxy, contract sync
-verified to fail on injected drift.
+**M0, M1 and M2 are complete.** Scaffolds pushed, schema live, 235 seed words,
+rooms working end to end: create/join by code, host-only settings, host
+succession on disconnect, and refresh-survivable sessions via reconnect tokens.
+Verified by a 22-case socket smoke test (`pnpm smoke` in the backend repo).
+
+Two bugs found and fixed along the way, both worth recording because they were
+invisible until exercised:
+
+- `Result<Record<string, never>>` was unsatisfiable — intersecting `{ok: true}`
+  with `Record<string, never>` collapses `ok` to `never`, so no success ack
+  could be constructed. Contract is now v2.
+- Frontend CI could not fetch the contract at all: `raw.githubusercontent.com`
+  cannot authenticate against a private repo. CI now checks the backend out as
+  a sibling using a `BE_REPO_TOKEN` secret. **This secret must be added to the
+  frontend repo before its CI will pass.**
 
 Dropping the admin panel saved ~1.5 days directly, and removed the dependency
 that previously held dictionary management hostage to a UI milestone.

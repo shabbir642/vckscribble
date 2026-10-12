@@ -26,4 +26,4 @@ contract locally instead of fetching it from GitHub.
 
 ## Status
 
-M0 (scaffold) and M1 (dictionary) complete. M2 (rooms) is next.
+M0 (scaffold), M1 (dictionary) and M2 (rooms) complete. M3 (canvas) is next.
