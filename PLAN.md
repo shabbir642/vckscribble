@@ -5,10 +5,10 @@ from the original:
 
 1. The drawer gets 3 suggested words **and** can write their own if none appeal.
 2. The dictionary is corporate slang, not generic nouns.
-3. The owner can extend the dictionary through an admin panel.
+3. The dictionary can be extended by the owner — via direct SQL, plus a small
+   token-protected endpoint added at the very end of the build.
 
-Those three requirements, not the drawing engine, are what shape the
-architecture below.
+No admin UI, no owner accounts, no login. See §7.
 
 ---
 
@@ -16,11 +16,13 @@ architecture below.
 
 Worth stating up front, because each one rules out an "obvious" simpler choice.
 
-**Requirement 3 forces persistence.** The original Skribbl is entirely
-ephemeral — rooms live in memory and die with the process. An owner-curated
-dictionary cannot. This adds a database, a migration story, and an
-authenticated admin surface that otherwise would not exist. Everything else
-(rooms, strokes, scores) stays in memory and remains disposable.
+**Requirement 3 needs persistence, but no longer needs a UI.** The original
+Skribbl is entirely ephemeral — rooms live in memory and die with the process.
+A curated dictionary cannot, and neither can the record of words players invent
+during play. That justifies a database. It does *not* justify an admin panel:
+a single-operator system where the operator can run SQL is already a complete
+management interface. Rooms, strokes, and scores stay in memory and remain
+disposable.
 
 **Requirement 2 breaks single-word assumptions.** Corporate slang is mostly
 *phrases* — `circle back`, `low-hanging fruit`, `boil the ocean`. Skribbl's
@@ -35,14 +37,14 @@ nearly uncorrelated with length or familiarity: `synergy` is short and
 universally known and almost impossible to draw, while `drinking from the
 firehose` is long and obscure and draws itself. So difficulty is a
 hand-authored drawability rating seeded per word, then corrected against real
-guess-rate data in the admin panel (§7).
+guess-rate data — queried with SQL (§7).
 
 **Requirement 1 cannot be pre-moderated.** A custom word is used *immediately* —
-the round starts the instant it is submitted, so there is no window for owner
-review before it reaches players. Moderation is therefore synchronous
-(validation + profanity filter at submit time) with an in-game report button as
-the backstop. Owner review happens *after* play, when deciding whether the word
-earns a permanent place in the dictionary.
+the round starts the instant it is submitted, so there is no window for review
+before it reaches players. Moderation is therefore synchronous (validation +
+profanity filter at submit time) with an in-game report button as the backstop.
+Owner review happens *after* play, when deciding whether a word earns a
+permanent place in the dictionary.
 
 ---
 
@@ -53,7 +55,7 @@ earns a permanent place in the dictionary.
 | Language | TypeScript throughout | One shared event-contract module; wire protocol cannot drift between client and server |
 | Client | React + Vite | Fast HMR; canvas work is plain DOM API regardless of framework |
 | Server | Node + Express + Socket.IO | Socket.IO gives rooms, acks, and reconnection handling for free |
-| DB | SQLite + Drizzle | Single owner, single instance. A managed Postgres would be operational overhead for what is one table of words |
+| DB | SQLite + Drizzle | One file, zero ops, and `sqlite3 game.db` *is* the admin panel. Managed Postgres would be overhead for one table of words |
 | Deploy | Single container, Fly.io or Railway | WebSocket-friendly with a persistent volume. **Not** Vercel/Lambda — serverless cannot hold socket connections |
 
 Workspace layout (pnpm):
@@ -78,18 +80,22 @@ words
   source('seed'|'owner'|'player'), times_drawn, times_guessed, created_at
 
 suggestions
-  id, text, submitted_by, room_code, created_at,
-  status('pending'|'approved'|'rejected'), times_used
+  id, text, submitted_by, room_code, created_at, times_used
 ```
 
 The seed dictionary (~200 entries) lives in `server/src/db/words.seed.ts` under
 version control, not as raw INSERTs — so dictionary changes are reviewable in
-diffs. Seeding is idempotent on `text`, runs on boot, and never overwrites
-owner edits to an existing row.
+diffs. Seeding is idempotent on `text`, runs on boot, and never overwrites rows
+you have edited by hand.
 
-`suggestions` is deliberately a separate table from `words`. Player-submitted
-text is untrusted until you approve it; mixing it into the live dictionary with
-a status flag invites a query that forgets to filter.
+`suggestions` stays a separate table from `words`. Player-submitted text is
+untrusted until promoted; mixing it into the live dictionary behind a status
+flag invites a query that forgets to filter. Without an admin UI there is no
+`status` column — promotion *is* the INSERT, so a row's presence in `words` is
+the only state that matters.
+
+`times_drawn` / `times_guessed` accumulate during play with no UI consumer.
+They exist for the retirement query in §7.
 
 ---
 
@@ -105,16 +111,16 @@ The drawer sees the 3 candidates plus a **"Write my own"** field. On submit:
 - length bounds (3–40 chars), must contain a letter
 - profanity filter, synchronous
 - per-player rate limit — prevents `aaaaa` every round
-- reject if it duplicates a disabled word (someone retired it for a reason)
+- reject if it duplicates a disabled word (it was retired for a reason)
 
 A 15s selection timer auto-picks a candidate if the drawer stalls, so one AFK
 player cannot freeze the room.
 
-Every accepted custom word is written to `suggestions` as `pending`. **This is
-what links requirement 1 to requirement 3:** play itself generates your
-candidate vocabulary, and the admin queue is where you promote what worked.
-A word submitted by several different players, and actually guessed, is a
-strong candidate — which is why `suggestions` tracks `times_used`.
+Every accepted custom word is written to `suggestions`. **This is what links
+requirement 1 to requirement 3:** play itself generates your candidate
+vocabulary, and a SQL query is where you promote what worked. A word submitted
+by several different players *and* actually guessed is a strong candidate —
+which is why `suggestions` tracks `times_used`.
 
 ---
 
@@ -130,8 +136,8 @@ they see the drawing mid-round), and round replay/export later.
 
 Performance is handled by caching committed strokes to an offscreen canvas and
 only re-rendering live on undo/clear. Pointer events batch per animation frame
-rather than emitting per-event. Stroke count is capped per round as a
-memory guard.
+rather than emitting per-event. Stroke count is capped per round as a memory
+guard.
 
 Tools: brush (3 sizes), color palette, fill, eraser, undo, clear.
 
@@ -155,66 +161,96 @@ non-space characters, distributed across *all* words in the phrase rather than
 front-loading the first one.
 
 **Leak prevention:** the drawer cannot post to chat, and players who have
-already guessed correctly are moved to a separate post-guess channel — otherwise
-the first correct guesser trivially spoils the round.
+already guessed correctly move to a separate post-guess channel — otherwise the
+first correct guesser trivially spoils the round.
 
 **Scoring:** guessers earn by time remaining; the drawer earns per correct
 guess, so drawing clearly is rewarded over drawing obscurely.
 
 ---
 
-## 7. Owner admin (`/admin`)
+## 7. Word management — SQL now, endpoint last
 
-Auth: password from an env var → signed, httpOnly session cookie, rate-limited
-login. No user table, no registration, no password reset — you are the only
-account, and every one of those features would be attack surface for zero gain.
+No admin panel, no auth, no owner account. Two mechanisms:
 
-Capabilities:
+### 7a. SQL — available from M1, free
 
-- browse/search the dictionary, filter by category, source, enabled state
-- add words singly or by bulk paste
-- enable/disable without deleting (preserves play stats)
-- review the pending-suggestion queue; approve promotes into `words` as
-  `source='player'`
-- **per-word stats: draw count and guess rate.** This is the feedback loop that
-  fixes the drawability ratings from §1 — a word drawn 40 times and guessed
-  twice is miscategorized or simply unfun, and should be retired on evidence
-  rather than instinct.
+Because the dictionary is a table, it is manageable from the moment the schema
+exists. There is nothing to build and nothing to wait for.
+
+```sql
+-- Add words by hand
+INSERT INTO words (text, category, drawability, enabled, source)
+VALUES ('circle back', 'meeting', 2, 1, 'owner');
+
+-- What are players inventing? Most-submitted first
+SELECT text, SUM(times_used) AS uses, COUNT(*) AS submissions
+FROM suggestions GROUP BY text ORDER BY uses DESC;
+
+-- Promote the good ones
+INSERT OR IGNORE INTO words (text, category, drawability, enabled, source)
+SELECT DISTINCT text, 'player', 2, 1, 'player'
+FROM suggestions WHERE text IN ('eat our own dogfood', 'swim lane');
+
+-- Retire what nobody ever guesses (fixes drawability ratings on evidence)
+SELECT text, times_drawn, times_guessed,
+       ROUND(100.0 * times_guessed / times_drawn) AS guess_pct
+FROM words WHERE times_drawn >= 10 ORDER BY guess_pct ASC;
+
+UPDATE words SET enabled = 0 WHERE text = 'synergy';
+```
+
+### 7b. Endpoint — deferred to the end of the build (M9)
+
+`POST /api/words`, bulk-accepting `{ words: [{ text, category, drawability }] }`,
+idempotent on `text`, guarded by a static bearer token from an env var.
+
+Note on that token: a shared secret in an env var is meaningfully weaker than a
+login, and this endpoint writes to the database. It is the right weight here
+only because the blast radius is "someone adds words to a party game" — but it
+must not be left unguarded, or it becomes a public spam target the moment the
+URL is known.
+
+**Deferring this costs nothing**, which is exactly why it goes last: 7a already
+covers every case from M1 onward. The endpoint is a convenience for adding words
+without shell access to the volume, not a capability.
 
 ---
 
 ## 8. Build timeline
 
 Estimates are solo-developer working days. They assume the customizations are
-built *into* each phase rather than appended — §4 and §6 in particular are
-cheap now and expensive later.
+built *into* each phase rather than appended — §4 and §6 in particular are cheap
+now and expensive later.
 
 | # | Milestone | Days | Depends on |
 |---|---|---|---|
 | M0 | Scaffold: workspace, TS config, shared event contract, CI lint/build | 0.5 | — |
-| M1 | DB, schema, seed dictionary (~200 corporate slang entries, rated), admin auth skeleton | 1.5 | M0 |
+| M1 | DB, schema, seed dictionary (~200 corporate slang entries, rated) | 1.0 | M0 |
 | M2 | Rooms: create/join by code, lobby, player list, host settings, reconnect-by-token | 1.0 | M0 |
 | M3 | Canvas: stroke log, drawing sync, tools, late-joiner replay, undo | 2.0 | M2 |
 | M4 | Game loop: round state machine, server timer, word selection, **custom-word entry** | 2.0 | M1, M2 |
 | M5 | Guessing: phrase normalization, matching, hints, scoring, channel separation | 1.5 | M4 |
-| M6 | Admin panel: CRUD, bulk import, suggestion queue, stats | 1.0 | M1, M4 |
-| M7 | Polish: avatars, sound, mobile touch, end-game podium | 2.0 | M5 |
-| M8 | Deploy: container, volume, env config, load/abuse hardening | 1.0 | M7 |
+| M6 | Polish: avatars, sound, mobile touch, end-game podium | 2.0 | M5 |
+| M7 | Deploy: container, volume, env config, load/abuse hardening | 1.0 | M6 |
+| M8 | `POST /api/words` + bearer token | 0.25 | M7 |
 
-**Total ≈ 12.5 working days ≈ 3 calendar weeks solo.**
+**Total ≈ 11.25 working days ≈ 2.5 calendar weeks solo.**
 
-Three checkpoints where it is worth stopping to play it before continuing:
+Dropping the admin panel saved ~1.5 days directly, and removed the dependency
+that previously held dictionary management hostage to a UI milestone.
+
+Two checkpoints where it is worth stopping to play it before continuing:
 
 - **After M3** — two browsers, one draws, the other watches. Proves the hardest
   technical risk (sync + replay) before any game logic is layered on it.
 - **After M5** — the game is fully playable end to end. This is where the
   corporate-slang dictionary gets its first real test, and where drawability
-  ratings will need their first correction.
-- **After M6** — you can run the dictionary yourself; everything past this point
-  is polish and can be cut if you want to ship early.
+  ratings will need their first correction. From M1 onward you can fix them with
+  an UPDATE mid-session, without waiting for a tool to be built.
 
-M2 and M3 are the critical path; M1/M6 (dictionary and admin) are independent of
-the drawing work and could run in parallel with a second developer.
+M2 → M3 → M4 → M5 is the critical path. M1 (dictionary) is independent of the
+drawing work and could run in parallel with a second developer.
 
 ### Principal risks
 
@@ -224,4 +260,5 @@ the drawing work and could run in parallel with a second developer.
 | Round-transition race conditions | Server-authoritative state machine, single timer source, clients render only what they're told (M4) |
 | Mobile touch handling | Pointer Events API from the start rather than mouse events retrofitted (M3) |
 | Custom-word abuse | Sync validation, profanity filter, rate limit, in-game report (M4) |
-| Slang dictionary skews stale or regional | Stats-driven retirement in admin; seed file is version-controlled and reviewable (M7) |
+| Unguarded write endpoint | Bearer token from env, required at M8 — not optional |
+| Slang dictionary skews stale or regional | Stats-driven retirement query in §7a |
