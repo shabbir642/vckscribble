@@ -27,7 +27,12 @@ contract locally instead of fetching it from GitHub.
 ## Status
 
 All milestones complete (M0–M8). Playable end to end; backend verified in its
-production container with 62 passing socket tests.
+production container with 64 passing socket tests. Socket contract is at v3.
+
+One play session's worth of fixes has landed on top — real flood fill, legible
+multi-word masks, a working invite link, a pinned light theme, coloured guess
+feedback and an end-of-game celebration. See the post-release section of
+`PLAN.md`.
 
 **Before deploying:** add a `BE_REPO_TOKEN` secret to the frontend repo (a PAT
 with read access to the backend repo) or its CI contract check will fail.

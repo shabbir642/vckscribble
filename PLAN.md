@@ -162,7 +162,17 @@ only re-rendering live on undo/clear. Pointer events batch per animation frame
 rather than emitting per-event. Stroke count is capped per round as a memory
 guard.
 
-Tools: brush (3 sizes), color palette, fill, eraser, undo, clear.
+Tools: brush (3 sizes), 30-colour palette, flood fill, eraser, undo, clear.
+
+**Fill deserves a note**, because it is the one tool that is not itself vector
+data. It is stored as a seed point plus a colour, and executed as a scanline
+flood fill against the bitmap *as it stands at that point in the log*. That is
+what keeps it compatible with a vector source of truth: replaying strokes in
+order reproduces the same enclosed regions, because each fill sees exactly the
+strokes that preceded it. Two consequences fall out of this and are intended —
+an unenclosed region floods the whole canvas (a gap in an outline "leaks", as in
+the original game), and matching carries a tolerance so antialiased stroke edges
+do not halo.
 
 ---
 
@@ -263,7 +273,7 @@ now and expensive later.
 **All milestones M0–M8 are complete.** The game is playable end to end and the
 backend runs in its production container.
 
-Verified: 62 socket-level test cases across three suites (`pnpm smoke`,
+Verified: 64 socket-level test cases across three suites (`pnpm smoke`,
 `smoke:game`, `smoke:guess`), all passing against both a dev server and the
 built Docker image, plus the words endpoint and graceful shutdown.
 
@@ -274,6 +284,7 @@ Each was invisible to the type checker and to inspection:
 - `Result<Record<string, never>>` was unsatisfiable — intersecting `{ok: true}`
   with `Record<string, never>` collapses `ok` to `never`, so no success ack
   could be constructed. (Contract v2.)
+
 - Frontend CI could not fetch the contract at all: `raw.githubusercontent.com`
   cannot authenticate against a private repo, leaving the drift guard inert in
   the one place it mattered. CI now checks the backend out as a sibling.
@@ -287,14 +298,13 @@ Each was invisible to the type checker and to inspection:
 ### Known gaps
 
 - **The frontend has no automated tests.** It typechecks and builds against the
-  real contract, and every server interaction behind it is covered, but the UI
-  itself has not been driven in a browser.
+  real contract, and every server interaction behind it is covered, but nothing
+  drives the UI itself. The six defects below were all found by playing it,
+  which is exactly the class of problem this gap leaves open.
 - **Profanity filtering is a short hand-written list.** Fine among colleagues;
   swap in a maintained library before exposing this to strangers.
 - **Single instance only.** Rooms live in memory, so horizontal scaling needs a
   Redis adapter first.
-- Flood fill is a background wash, not a true paint-bucket: a raster flood fill
-  cannot be replayed from a vector stroke log.
 
 Two checkpoints where it is worth stopping to play it before continuing:
 
@@ -306,6 +316,35 @@ Two checkpoints where it is worth stopping to play it before continuing:
   an UPDATE mid-session, without waiting for a tool to be built.
 
 Both checkpoints are now reachable: run both servers and open two browsers.
+
+### Post-release fixes (first play session)
+
+Playing it surfaced six issues, none of which any automated check could have
+caught — five were visual, and the sixth only failed away from `localhost`:
+
+- **Fill painted the whole canvas.** It was a `destination-over` wash, an
+  honest shortcut taken because a raster fill seemed irreconcilable with a
+  vector log. It is not: see §5 above. Replaced with a real flood fill.
+- **Multi-word masks ran together.** The server already padded between words;
+  HTML collapses a run of spaces, so `_ _ _   _ _ _` rendered as one blank.
+  Fixed with `white-space: pre` — the bug was in the display, not the masking.
+- **Copy invite link silently did nothing.** `navigator.clipboard` only exists
+  in a secure context, so on a LAN address it was `undefined`, the call threw,
+  and an empty `catch` swallowed it. This would have worked forever on
+  localhost. Now falls back to a textarea, then to revealing the link.
+- **The theme followed the viewer's OS setting.** Pinned to light: the canvas
+  is transparent and fill floods against what is painted, so a surface that
+  differed per viewer would render one stroke log as two different pictures.
+- **Guess feedback had no colour.** Added a `tone` field to the contract
+  (**v3**) rather than having the client infer intent by matching message text,
+  which breaks the moment the wording changes. Covered by two new assertions.
+- **No end-of-game payoff.** Winner banner, crown, confetti; ties announce every
+  player on the top score; all of it disabled under `prefers-reduced-motion`.
+
+Also from the same session: `CLIENT_ORIGIN` accepts a comma-separated list, and
+the client derives the socket host from the page's own origin rather than a
+literal `localhost`, so a second device on the wifi reaches the backend on the
+dev machine instead of looking for one on itself.
 
 M2 → M3 → M4 → M5 is the critical path. M1 (dictionary) is independent of the
 drawing work and could run in parallel with a second developer.
