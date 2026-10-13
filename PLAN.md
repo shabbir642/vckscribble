@@ -273,9 +273,10 @@ now and expensive later.
 **All milestones M0–M8 are complete.** The game is playable end to end and the
 backend runs in its production container.
 
-Verified: 77 socket-level test cases across five suites (`pnpm smoke`,
-`smoke:game`, `smoke:guess`, `smoke:join`, `smoke:roster`), all passing against
-a dev server, plus the words endpoint and graceful shutdown.
+Verified: 83 socket-level test cases across six suites (`pnpm smoke`,
+`smoke:game`, `smoke:guess`, `smoke:join`, `smoke:roster`, `smoke:errors`), all
+passing against both a dev server and the built container, plus the words
+endpoint and graceful shutdown.
 
 ### Bugs found by exercising the system
 
@@ -368,6 +369,20 @@ Covered by `smoke-join.mjs` and `smoke-roster.mjs` — 13 assertions that fail
 with the fixes reverted. Two of those only failed once tightened; they had been
 passing against the broken build for the wrong reasons, which is the same trap
 as a drift guard that cannot reach its source.
+
+### Nothing is tracked, on purpose
+
+An events table was built and then removed. It worked, and the queries were
+useful, but it was the only thing in the system that needed to survive a
+restart — and that single requirement forced a paid persistent volume onto a
+project whose whole point is being cheap and fun. The dictionary re-seeds itself
+from source at every boot, so without that table the app runs on ephemeral
+storage and scales to zero between sessions.
+
+What remains is a log line for browser-side errors, which costs nothing and
+covers the one failure the server genuinely cannot see: a client that never
+manages to connect. Word statistics, owner-added words and player-invented
+custom words are now discarded on restart. Attaching a volume brings them back.
 
 **Known remaining gaps**, deliberately not fixed: turn order is join order and
 never shuffled, so the host always draws first; words offered but not chosen are
