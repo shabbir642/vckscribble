@@ -273,9 +273,9 @@ now and expensive later.
 **All milestones M0–M8 are complete.** The game is playable end to end and the
 backend runs in its production container.
 
-Verified: 64 socket-level test cases across three suites (`pnpm smoke`,
-`smoke:game`, `smoke:guess`), all passing against both a dev server and the
-built Docker image, plus the words endpoint and graceful shutdown.
+Verified: 77 socket-level test cases across five suites (`pnpm smoke`,
+`smoke:game`, `smoke:guess`, `smoke:join`, `smoke:roster`), all passing against
+a dev server, plus the words endpoint and graceful shutdown.
 
 ### Bugs found by exercising the system
 
@@ -340,6 +340,41 @@ caught — five were visual, and the sixth only failed away from `localhost`:
   which breaks the moment the wording changes. Covered by two new assertions.
 - **No end-of-game payoff.** Winner banner, crown, confetti; ties announce every
   player on the top score; all of it disabled under `prefers-reduced-motion`.
+
+### Roster changes mid-game (audit)
+
+A second pass over the whole flow, prompted by the mid-game joiner never getting
+a turn. All six below share a cause: **the server handles events well and
+handles state changes between events badly.** Every rule about whether a turn or
+a game should still be running hangs off an event that a roster change does not
+fire, so nothing recomputed.
+
+- **A mid-game joiner never drew.** The draw order was snapshotted at kickoff.
+- **A drawer who refreshed lost their word**, coming back to the mask like a
+  guesser while still holding the pen — and mid-selection, to no choices at all.
+- **Acting on a departure immediately was itself wrong**, because a refresh
+  reaches the server as exactly that event. A grace period now separates "left"
+  from "reloading".
+- **A turn ran its full clock** when the last un-guessed player left.
+- **A game continued with one player**, drawing to an empty room.
+- **An abandoned seat held its name and its slot in the count**, locking a
+  returning player out of their own name in a room reporting itself full.
+
+Plus one balance fix: an uncapped drawer bonus of 50 per guesser made a turn in
+a ten-player room worth more than a guesser could score all game, so turn order
+decided the winner.
+
+Covered by `smoke-join.mjs` and `smoke-roster.mjs` — 13 assertions that fail
+with the fixes reverted. Two of those only failed once tightened; they had been
+passing against the broken build for the wrong reasons, which is the same trap
+as a drift guard that cannot reach its source.
+
+**Known remaining gaps**, deliberately not fixed: turn order is join order and
+never shuffled, so the host always draws first; words offered but not chosen are
+not excluded from later choice sets; custom words are not recorded as used, so
+one can repeat within a game; two tabs in one browser share a session token and
+the second silently takes the seat; rate-limit buckets are keyed by socket, so
+reconnecting resets them.
 
 Also from the same session: `CLIENT_ORIGIN` accepts a comma-separated list, and
 the client derives the socket host from the page's own origin rather than a

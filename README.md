@@ -27,7 +27,7 @@ contract locally instead of fetching it from GitHub.
 ## Status
 
 All milestones complete (M0–M8). Playable end to end; backend verified in its
-production container with 64 passing socket tests. Socket contract is at v3.
+production container with 77 passing socket tests. Socket contract is at v3.
 
 One play session's worth of fixes has landed on top — real flood fill, legible
 multi-word masks, a working invite link, a pinned light theme, coloured guess
